@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rim-inm-drive</title>
+  <style>
+    :root { color-scheme: light dark; font-family: "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f4f4f5; color: #18181b; }
+    main { padding: 28px; }
+    h1 { margin: 0 0 6px; font-size: 25px; }
+    p { margin: 0 0 18px; color: #71717a; font-size: 14px; }
+    label { display: block; margin-top: 12px; font-size: 13px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; margin-top: 5px; padding: 9px 10px; border: 1px solid #a1a1aa; border-radius: 7px; background: white; color: #18181b; }
+    .folder { display: flex; align-items: end; gap: 8px; }
+    .folder label { flex: 1; }
+    button { margin-top: 16px; padding: 10px 15px; border: 1px solid #2563eb; border-radius: 7px; background: #2563eb; color: white; font-weight: 600; cursor: pointer; }
+    button.secondary { border-color: #a1a1aa; background: white; color: #18181b; }
+    button:disabled { opacity: .5; cursor: wait; }
+    #status { min-height: 20px; margin-top: 14px; padding: 9px; border-radius: 7px; background: #e4e4e7; font-size: 13px; }
+    #status[data-type="error"] { background: #fee2e2; color: #991b1b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #09090b; color: #fafafa; }
+      input, button.secondary { background: #18181b; color: #fafafa; border-color: #3f3f46; }
+      p { color: #a1a1aa; }
+      #status { background: #27272a; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>rim-inm-drive</h1>
+    <p>/share-cloud-drive のルートとローカルフォルダを30秒ごとに双方向同期します。</p>
+    <form id="setup">
+      <label>サーバーURL<input id="serverUrl" type="url" required></label>
+      <div class="folder">
+        <label>ローカル同期フォルダ<input id="localPath" required></label>
+        <button id="chooseFolder" class="secondary" type="button">選択</button>
+      </div>
+      <label>アカウント名<input id="accountName" autocomplete="username" required></label>
+      <label>パスワード<input id="password" type="password" autocomplete="current-password" required></label>
+      <button id="submit" type="submit">同期を開始</button>
+      <div id="status">初回設定後、同期フォルダをExplorerで開きます。</div>
+    </form>
+  </main>
+  <script src="./renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+{
+  "name": "rim-inm-drive",
+  "version": "0.1.0",
+  "private": true,
+  "main": "app/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2"
+  },
+  "build": {
+    "appId": "jp.rimworld-inm.drive",
+    "productName": "rim-inm-drive",
+    "asar": true,
+    "files": [
+      "app/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ],
+      "artifactName": "rim-inm-drive.exe"
+    }
+  }
+}
