@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
 const { createReadStream, createWriteStream } = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -8,11 +8,20 @@ const { Readable } = require("node:stream");
 const { pipeline } = require("node:stream/promises");
 
 const APP_NAME = "rim-inm-drive";
+const APP_ICON = path.join(app.getAppPath(), "ico.png");
+const STATUS_ICONS = {
+  synced: path.join(app.getAppPath(), "synced.png"),
+  syncing: path.join(app.getAppPath(), "syncing.png"),
+  unexecuted: path.join(app.getAppPath(), "unexecuted.png"),
+};
 const SYNC_INTERVAL_MS = 30_000;
 const INVALID_WINDOWS_NAME = /[<>:"|?*\u0000-\u001f]/;
 const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
 let mainWindow;
+let tray;
+let trayStatus = "unexecuted";
+let trayStatusMessage = "未同期";
 let syncTimer;
 let syncRunning = false;
 
@@ -243,9 +252,53 @@ function isUnderHandledPrefix(remotePath, prefixes) {
   return prefixes.some((prefix) => remotePath.startsWith(`${prefix}/`));
 }
 
+function statusIcon(status) {
+  return nativeImage.createFromPath(STATUS_ICONS[status]).resize({ width: 20, height: 20 });
+}
+
+async function openSyncFolder() {
+  const config = await loadConfig();
+  await fs.mkdir(config.localPath, { recursive: true });
+  await shell.openPath(config.localPath);
+}
+
+function showSetupWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) createSetupWindow();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setImage(statusIcon(trayStatus));
+  tray.setToolTip(`${APP_NAME} - ${trayStatusMessage}`);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: `状態: ${trayStatusMessage}`, enabled: false },
+    { type: "separator" },
+    { label: "同期フォルダを開く", click: () => void openSyncFolder() },
+    { label: "今すぐ同期", enabled: !syncRunning, click: () => void syncNow() },
+    { label: "設定", click: showSetupWindow },
+    { type: "separator" },
+    { label: "終了", click: () => app.quit() },
+  ]));
+}
+
+function setTrayStatus(status, message) {
+  trayStatus = status;
+  trayStatusMessage = message;
+  updateTrayMenu();
+}
+
+function createTray() {
+  tray = new Tray(statusIcon(trayStatus));
+  tray.on("double-click", () => void openSyncFolder());
+  updateTrayMenu();
+}
+
 async function syncNow() {
   if (syncRunning) return { ok: false, message: "同期は既に実行中です。" };
   syncRunning = true;
+  setTrayStatus("syncing", "同期中");
   try {
     const config = await loadConfig();
     config.serverUrl = normalizeServerUrl(config.serverUrl);
@@ -334,14 +387,17 @@ async function syncNow() {
       }
     }
     await fs.writeFile(statePath(), JSON.stringify({ entries: finalEntries }, null, 2), "utf8");
+    setTrayStatus("synced", "同期済み");
     log("同期が完了しました。");
     return { ok: true, message: "同期が完了しました。" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "同期に失敗しました。";
     log(message, "error");
+    setTrayStatus("unexecuted", "同期エラー");
     return { ok: false, message };
   } finally {
     syncRunning = false;
+    updateTrayMenu();
   }
 }
 
@@ -359,6 +415,7 @@ function createSetupWindow() {
     height: 510,
     resizable: false,
     title: APP_NAME,
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -418,6 +475,7 @@ ipcMain.handle("setup", async (_event, values) => {
 
 app.whenReady().then(async () => {
   app.setName(APP_NAME);
+  createTray();
   const config = await loadConfig();
   if (process.argv.includes("--setup") || !decryptToken(config.encryptedToken)) {
     createSetupWindow();

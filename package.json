@@ -17,13 +17,17 @@
     "asar": true,
     "files": [
       "app/**/*",
+      "ico.png",
+      "synced.png",
+      "syncing.png",
+      "unexecuted.png",
       "package.json"
     ],
     "directories": {
       "output": "dist"
     },
     "win": {
-      "signAndEditExecutable": false,
+      "icon": "ico.png",
       "target": [
         "portable"
       ],
