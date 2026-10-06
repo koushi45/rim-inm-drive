@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
-const { createReadStream, createWriteStream } = require("node:fs");
+const { appendFileSync, createReadStream, createWriteStream, mkdirSync } = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
@@ -15,8 +15,10 @@ const STATUS_ICONS = {
   unexecuted: path.join(app.getAppPath(), "unexecuted.png"),
 };
 const SYNC_INTERVAL_MS = 30_000;
+const MAX_LOCAL_DELETES_PER_SYNC = 10;
 const INVALID_WINDOWS_NAME = /[<>:"|?*\u0000-\u001f]/;
 const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+const EMPTY_REMOTE_MANIFEST_MESSAGE = "サーバー側の同期一覧が空です。接続先やアカウントが違う可能性があるため、ローカル削除を停止しました。";
 
 let mainWindow;
 let tray;
@@ -63,6 +65,12 @@ async function saveConfig(config) {
   await fs.writeFile(configPath(), JSON.stringify(config, null, 2), "utf8");
 }
 
+async function backupStateFile() {
+  try {
+    await fs.copyFile(statePath(), `${statePath()}.${new Date().toISOString().replaceAll(":", "-")}.bak`);
+  } catch {}
+}
+
 function encryptToken(token) {
   if (!token) return "";
   if (!safeStorage.isEncryptionAvailable()) {
@@ -80,9 +88,26 @@ function decryptToken(encryptedToken) {
   }
 }
 
-function log(message) {
-  console.log(`[${new Date().toISOString()}] ${message}`);
+function logPath() {
+  return path.join(app.getPath("userData"), "app.log");
 }
+
+function log(message, level = "info") {
+  const line = `[${new Date().toISOString()}] [${level}] ${message}`;
+  console.log(line);
+  try {
+    mkdirSync(path.dirname(logPath()), { recursive: true });
+    appendFileSync(logPath(), `${line}\n`, "utf8");
+  } catch {}
+}
+
+process.on("uncaughtException", (error) => {
+  log(error instanceof Error ? error.stack || error.message : String(error), "error");
+});
+
+process.on("unhandledRejection", (reason) => {
+  log(reason instanceof Error ? reason.stack || reason.message : String(reason), "error");
+});
 
 function normalizeServerUrl(value) {
   const url = new URL(value);
@@ -277,6 +302,7 @@ function updateTrayMenu() {
     { type: "separator" },
     { label: "同期フォルダを開く", click: () => void openSyncFolder() },
     { label: "今すぐ同期", enabled: !syncRunning, click: () => void syncNow() },
+    { label: "接続テスト", click: () => void testConnection() },
     { label: "設定", click: showSetupWindow },
     { type: "separator" },
     { label: "終了", click: () => app.quit() },
@@ -289,10 +315,46 @@ function setTrayStatus(status, message) {
   updateTrayMenu();
 }
 
+function notifyStatus(message) {
+  if (!tray) return;
+  try {
+    tray.displayBalloon({ title: APP_NAME, content: message });
+  } catch {}
+}
+
 function createTray() {
   tray = new Tray(statusIcon(trayStatus));
   tray.on("double-click", () => void openSyncFolder());
   updateTrayMenu();
+}
+
+async function testConnection({ notify = true } = {}) {
+  setTrayStatus("syncing", "接続テスト中");
+  try {
+    const config = await loadConfig();
+    config.serverUrl = normalizeServerUrl(config.serverUrl);
+    if (!decryptToken(config.encryptedToken)) throw new Error("先にログインしてください。");
+    const [manifest, previous] = await Promise.all([
+      fetchManifest(config),
+      loadJson(statePath(), { entries: {} }),
+    ]);
+    if (manifest.size === 0 && Object.keys(previous.entries || {}).length > 0) {
+      throw new Error(EMPTY_REMOTE_MANIFEST_MESSAGE);
+    }
+    const message = `接続OK: ${manifest.size}件の同期項目を確認しました。`;
+    log(message);
+    setTrayStatus("synced", "接続OK");
+    if (notify) notifyStatus(message);
+    return { ok: true, message };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "接続テストに失敗しました。";
+    log(`接続テスト失敗: ${message}`, "error");
+    setTrayStatus("unexecuted", "接続エラー");
+    if (notify) notifyStatus(`接続テスト失敗: ${message}`);
+    return { ok: false, message };
+  } finally {
+    updateTrayMenu();
+  }
 }
 
 async function syncNow() {
@@ -312,11 +374,24 @@ async function syncNow() {
       loadJson(statePath(), { entries: {} }),
     ]);
     const previousEntries = previous.entries || {};
+    if (remoteEntries.size === 0 && Object.keys(previousEntries).length > 0) {
+      throw new Error(EMPTY_REMOTE_MANIFEST_MESSAGE);
+    }
     const allPaths = [...new Set([
       ...remoteEntries.keys(),
       ...localEntries.keys(),
       ...Object.keys(previousEntries),
     ])].sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+    const localDeleteCandidates = allPaths.filter((remotePath) => {
+      const local = localEntries.get(remotePath);
+      const remote = remoteEntries.get(remotePath);
+      const prior = previousEntries[remotePath];
+      if (!prior || !local || remote) return false;
+      return local.signature === prior.localSignature && local.isFolder === prior.isFolder;
+    });
+    if (localDeleteCandidates.length > MAX_LOCAL_DELETES_PER_SYNC) {
+      throw new Error(`${localDeleteCandidates.length}件のローカル削除が検出されたため同期を停止しました。接続先やアカウントを確認してください。`);
+    }
     const handledPrefixes = [];
 
     for (const remotePath of allPaths) {
@@ -386,6 +461,7 @@ async function syncNow() {
         };
       }
     }
+    await backupStateFile();
     await fs.writeFile(statePath(), JSON.stringify({ entries: finalEntries }, null, 2), "utf8");
     setTrayStatus("synced", "同期済み");
     log("同期が完了しました。");
@@ -475,13 +551,16 @@ ipcMain.handle("setup", async (_event, values) => {
 
 app.whenReady().then(async () => {
   app.setName(APP_NAME);
+  app.setAppUserModelId("jp.rimworld-inm.drive");
   createTray();
+  log("アプリを起動しました。");
   const config = await loadConfig();
   if (process.argv.includes("--setup") || !decryptToken(config.encryptedToken)) {
     createSetupWindow();
   } else {
     await fs.mkdir(config.localPath, { recursive: true });
     await shell.openPath(config.localPath);
+    void testConnection({ notify: false });
     void syncNow();
   }
   await scheduleSync();

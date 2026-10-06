@@ -14,6 +14,7 @@
   "build": {
     "appId": "jp.rimworld-inm.drive",
     "productName": "rim-inm-drive",
+    "electronDist": "node_modules/electron/dist",
     "asar": true,
     "files": [
       "app/**/*",
